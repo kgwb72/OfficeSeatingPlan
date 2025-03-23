@@ -99,15 +99,32 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// Add CORS
+// Add File Upload configuration
+builder.Services.Configure<IISServerOptions>(options =>
+{
+    options.MaxRequestBodySize = 50 * 1024 * 1024; // Limit file uploads to 50 MB
+});
+
+// Enable request body larger than default
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = 50 * 1024 * 1024; // 50 MB
+});
+
+// Configure CORS
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowOrigin", corsBuilder =>
+    options.AddPolicy("AllowFrontend", policy =>
     {
-        corsBuilder.WithOrigins(builder.Configuration["Cors:AllowedOrigins"]?.Split(',') ?? new[] { "http://localhost:3000" })
+        policy
+            .WithOrigins(
+                builder.Configuration.GetSection("AllowedOrigins").Get<string[]>() ??
+                new[] { "http://localhost:3000", "http://localhost:8080", "http://localhost:5000" }
+            )
             .AllowAnyMethod()
             .AllowAnyHeader()
-            .AllowCredentials();
+            .AllowCredentials()
+            .WithExposedHeaders("Content-Disposition"); // Allow front-end to access the filename for downloads
     });
 });
 
@@ -132,7 +149,7 @@ if (app.Environment.IsDevelopment())
         var services = scope.ServiceProvider;
         try
         {
-            DbInitializer.InitializeAsync(services).Wait();
+            await DbInitializer.InitializeAsync(services);
         }
         catch (Exception ex)
         {
@@ -143,10 +160,30 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-app.UseCors("AllowOrigin");
+
+// Apply CORS policy
+app.UseCors("AllowFrontend");
+
+// Create uploads directories if they don't exist
+var uploadsFolder = Path.Combine(app.Environment.ContentRootPath, "uploads");
+if (!Directory.Exists(uploadsFolder))
+{
+    Directory.CreateDirectory(uploadsFolder);
+    Directory.CreateDirectory(Path.Combine(uploadsFolder, "layouts"));
+    Directory.CreateDirectory(Path.Combine(uploadsFolder, "panoramas"));
+}
+
+// Serve static files from uploads folder
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(
+        Path.Combine(app.Environment.ContentRootPath, "uploads")),
+    RequestPath = "/uploads"
+});
 
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseCors("AllowFrontend");
 
 app.MapControllers();
 
